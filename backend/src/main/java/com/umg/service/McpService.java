@@ -9,10 +9,12 @@ import com.umg.domain.enums.AuditStatus;
 import com.umg.domain.enums.ToolStatus;
 import com.umg.dto.McpRequest;
 import com.umg.dto.McpResponse;
+import com.umg.domain.entity.User;
 import com.umg.exception.ForbiddenException;
 import com.umg.exception.ResourceNotFoundException;
 import com.umg.exception.ToolExecutionException;
 import com.umg.repository.ToolRepository;
+import com.umg.repository.UserRepository;
 import com.umg.security.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,7 @@ public class McpService {
     private static final Logger log = LoggerFactory.getLogger(McpService.class);
 
     private final ToolRepository toolRepository;
+    private final UserRepository userRepository;
     private final ToolService toolService;
     private final PermissionService permissionService;
     private final AuditLogService auditLogService;
@@ -46,6 +49,7 @@ public class McpService {
     private final SecurityUtils securityUtils;
 
     public McpService(ToolRepository toolRepository,
+                      UserRepository userRepository,
                       ToolService toolService,
                       PermissionService permissionService,
                       AuditLogService auditLogService,
@@ -53,6 +57,7 @@ public class McpService {
                       ResponseShaper responseShaper,
                       SecurityUtils securityUtils) {
         this.toolRepository = toolRepository;
+        this.userRepository = userRepository;
         this.toolService = toolService;
         this.permissionService = permissionService;
         this.auditLogService = auditLogService;
@@ -153,11 +158,16 @@ public class McpService {
                     "Access denied for tool: " + toolName);
         }
 
+        // Resolve user context for RLS (department)
+        String userContext = userRepository.findById(userId)
+                .map(User::getDepartment)
+                .orElse(null);
+
         // Execute the tool
         long startTime = System.currentTimeMillis();
         try {
             ToolExecutor executor = toolExecutorFactory.getExecutor(tool.getToolType());
-            CompletableFuture<Object> future = executor.execute(tool, arguments);
+            CompletableFuture<Object> future = executor.execute(tool, arguments, userContext);
             Object rawResult = future.join();
 
             // Apply response shaping if configured
