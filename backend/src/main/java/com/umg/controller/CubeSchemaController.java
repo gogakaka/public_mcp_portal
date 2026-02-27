@@ -3,7 +3,7 @@ package com.umg.controller;
 import com.umg.domain.enums.SchemaStatus;
 import com.umg.dto.CubeSchemaDto;
 import com.umg.dto.PageResponse;
-import com.umg.security.CustomUserDetails;
+import com.umg.security.SecurityUtils;
 import com.umg.service.CubeSchemaService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
@@ -12,7 +12,6 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -30,14 +29,12 @@ import java.util.UUID;
 public class CubeSchemaController {
 
     private final CubeSchemaService cubeSchemaService;
+    private final SecurityUtils securityUtils;
 
-    /**
-     * CubeSchemaController 생성자.
-     *
-     * @param cubeSchemaService 스키마 관리 서비스
-     */
-    public CubeSchemaController(CubeSchemaService cubeSchemaService) {
+    public CubeSchemaController(CubeSchemaService cubeSchemaService,
+                                 SecurityUtils securityUtils) {
         this.cubeSchemaService = cubeSchemaService;
+        this.securityUtils = securityUtils;
     }
 
     /**
@@ -67,6 +64,22 @@ public class CubeSchemaController {
     }
 
     /**
+     * 활성 상태의 스키마 메타 정보를 조회합니다.
+     *
+     * <p>모든 ACTIVE 상태 스키마의 cube 이름, measures, dimensions 정보를 반환합니다.
+     * Cube.js 시맨틱 레이어의 메타 정보 제공에 사용됩니다.</p>
+     *
+     * <p>NOTE: 이 엔드포인트는 {@code /{id}} 보다 먼저 선언하여
+     * {@code /meta} 경로가 UUID 경로 변수로 잘못 매칭되지 않도록 합니다.</p>
+     *
+     * @return 활성 스키마의 메타 정보 목록
+     */
+    @GetMapping("/meta")
+    public ResponseEntity<List<Map<String, Object>>> getMeta() {
+        return ResponseEntity.ok(cubeSchemaService.getMeta());
+    }
+
+    /**
      * 특정 스키마의 상세 정보를 조회합니다.
      *
      * @param id 스키마의 UUID
@@ -89,7 +102,8 @@ public class CubeSchemaController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<CubeSchemaDto.Response> createSchema(
             @Valid @RequestBody CubeSchemaDto.CreateRequest request) {
-        CubeSchemaDto.Response response = cubeSchemaService.create(request, getCurrentUserId());
+        CubeSchemaDto.Response response = cubeSchemaService.create(
+                request, securityUtils.requireCurrentUserId());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -166,29 +180,5 @@ public class CubeSchemaController {
     @PostMapping("/{id}/validate")
     public ResponseEntity<CubeSchemaDto.ValidationResult> validateSchema(@PathVariable UUID id) {
         return ResponseEntity.ok(cubeSchemaService.validate(id));
-    }
-
-    /**
-     * 활성 상태의 스키마 메타 정보를 조회합니다.
-     *
-     * <p>모든 ACTIVE 상태 스키마의 cube 이름, measures, dimensions 정보를 반환합니다.
-     * Cube.js 시맨틱 레이어의 메타 정보 제공에 사용됩니다.</p>
-     *
-     * @return 활성 스키마의 메타 정보 목록
-     */
-    @GetMapping("/meta")
-    public ResponseEntity<List<Map<String, Object>>> getMeta() {
-        return ResponseEntity.ok(cubeSchemaService.getMeta());
-    }
-
-    /**
-     * 현재 인증된 사용자의 UUID를 반환합니다.
-     *
-     * @return 현재 사용자의 UUID
-     */
-    private UUID getCurrentUserId() {
-        var auth = SecurityContextHolder.getContext().getAuthentication();
-        var userDetails = (CustomUserDetails) auth.getPrincipal();
-        return userDetails.getUserId();
     }
 }

@@ -3,7 +3,7 @@ package com.umg.controller;
 import com.umg.domain.enums.DataSourceStatus;
 import com.umg.dto.AwsMcpServerDto;
 import com.umg.dto.PageResponse;
-import com.umg.security.CustomUserDetails;
+import com.umg.security.SecurityUtils;
 import com.umg.service.AwsMcpServerService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
@@ -12,7 +12,6 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -28,9 +27,12 @@ import java.util.UUID;
 public class AwsMcpServerController {
 
     private final AwsMcpServerService awsMcpServerService;
+    private final SecurityUtils securityUtils;
 
-    public AwsMcpServerController(AwsMcpServerService awsMcpServerService) {
+    public AwsMcpServerController(AwsMcpServerService awsMcpServerService,
+                                   SecurityUtils securityUtils) {
         this.awsMcpServerService = awsMcpServerService;
+        this.securityUtils = securityUtils;
     }
 
     /**
@@ -76,7 +78,8 @@ public class AwsMcpServerController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<AwsMcpServerDto.Response> createServer(
             @Valid @RequestBody AwsMcpServerDto.CreateRequest request) {
-        AwsMcpServerDto.Response response = awsMcpServerService.create(request, getCurrentUserId());
+        AwsMcpServerDto.Response response = awsMcpServerService.create(
+                request, securityUtils.requireCurrentUserId());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -133,7 +136,7 @@ public class AwsMcpServerController {
     @PostMapping("/{id}/sync")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<AwsMcpServerDto.SyncResult> syncTools(@PathVariable UUID id) {
-        return ResponseEntity.ok(awsMcpServerService.syncTools(id, getCurrentUserId()));
+        return ResponseEntity.ok(awsMcpServerService.syncTools(id, securityUtils.requireCurrentUserId()));
     }
 
     /**
@@ -147,18 +150,7 @@ public class AwsMcpServerController {
     public ResponseEntity<PageResponse<AwsMcpServerDto.SyncHistoryResponse>> getSyncHistory(
             @PathVariable UUID id,
             @PageableDefault(size = 20) Pageable pageable) {
-        Page<AwsMcpServerDto.SyncHistoryResponse> page = awsMcpServerService.findSyncHistory(id, pageable);
+        Page<AwsMcpServerDto.SyncHistoryResponse> page = awsMcpServerService.getSyncHistory(id, pageable);
         return ResponseEntity.ok(PageResponse.from(page, page.getContent()));
-    }
-
-    /**
-     * 현재 인증된 사용자의 UUID를 반환합니다.
-     *
-     * @return 현재 사용자의 UUID
-     */
-    private UUID getCurrentUserId() {
-        var auth = SecurityContextHolder.getContext().getAuthentication();
-        var userDetails = (CustomUserDetails) auth.getPrincipal();
-        return userDetails.getUserId();
     }
 }
