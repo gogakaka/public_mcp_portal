@@ -102,6 +102,22 @@ public class Tool {
     @JoinColumn(name = "owner_id", insertable = false, updatable = false)
     private User owner;
 
+    /** Cube.js 데이터소스 연결 (CUBE_JS 타입 도구용). */
+    @Column(name = "cube_datasource_id")
+    private UUID cubeDatasourceId;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cube_datasource_id", insertable = false, updatable = false)
+    private CubeDataSource cubeDatasource;
+
+    /** AWS MCP 서버 연결 (AWS_REMOTE 타입 도구용). */
+    @Column(name = "aws_server_id")
+    private UUID awsServerId;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "aws_server_id", insertable = false, updatable = false)
+    private AwsMcpServer awsServer;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

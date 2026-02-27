@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -85,4 +86,13 @@ public interface ToolRepository extends JpaRepository<Tool, UUID> {
      * @return the number of tools with the given status
      */
     long countByStatus(ToolStatus status);
+
+    /**
+     * Finds a tool by its name and associated AWS MCP server ID.
+     *
+     * @param name        the tool name
+     * @param awsServerId the AWS MCP server ID
+     * @return an optional containing the tool if found
+     */
+    Optional<Tool> findByNameAndAwsServerId(String name, UUID awsServerId);
 }

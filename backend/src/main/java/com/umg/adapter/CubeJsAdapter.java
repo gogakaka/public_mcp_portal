@@ -2,9 +2,11 @@ package com.umg.adapter;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.umg.domain.entity.CubeDataSource;
 import com.umg.domain.entity.Tool;
 import com.umg.domain.enums.ToolType;
 import com.umg.exception.ToolExecutionException;
+import com.umg.repository.CubeDataSourceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -25,11 +27,8 @@ import java.util.concurrent.CompletableFuture;
  * 행 수준 보안(RLS) 적용을 위해 {@code X-User-Context} 헤더에
  * 사용자 부서 정보를 주입합니다.</p>
  *
- * <p>connectionConfig에 필요한 항목:</p>
- * <ul>
- *   <li>{@code apiUrl} - Cube.js REST API 기본 URL (예: http://localhost:4000/cubejs-api/v1)</li>
- *   <li>{@code apiToken} - Cube.js API 토큰</li>
- * </ul>
+ * <p>도구에 {@code cubeDatasourceId}가 설정된 경우, 내부 데이터소스 레지스트리에서
+ * 연결 정보를 자동으로 가져옵니다. 그렇지 않으면 기존 connectionConfig를 사용합니다.</p>
  */
 @Component
 public class CubeJsAdapter implements ToolExecutor {
@@ -41,17 +40,21 @@ public class CubeJsAdapter implements ToolExecutor {
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final CubeDataSourceRepository cubeDataSourceRepository;
 
-    public CubeJsAdapter(ObjectMapper objectMapper) {
+    public CubeJsAdapter(ObjectMapper objectMapper, CubeDataSourceRepository cubeDataSourceRepository) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = objectMapper;
+        this.cubeDataSourceRepository = cubeDataSourceRepository;
     }
 
     /**
      * Cube.js API로 분석 쿼리를 전송하여 도구를 실행합니다.
-     * measures, dimensions, filters 등의 파라미터를 Cube.js 쿼리 형식으로 변환합니다.
+     *
+     * <p>도구에 내부 데이터소스(cubeDatasourceId)가 연결된 경우 레지스트리에서
+     * 연결 정보를 가져오고, 그렇지 않으면 도구의 connectionConfig를 사용합니다.</p>
      *
      * @param tool        연결 설정을 포함한 도구 엔티티
      * @param params      Cube.js 쿼리 파라미터 (measures, dimensions, filters 등)
@@ -62,7 +65,7 @@ public class CubeJsAdapter implements ToolExecutor {
     public CompletableFuture<Object> execute(Tool tool, Map<String, Object> params, String userContext) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                Map<String, Object> config = parseConnectionConfig(tool);
+                Map<String, Object> config = resolveConnectionConfig(tool);
                 String apiUrl = (String) config.get("apiUrl");
                 String apiToken = (String) config.get("apiToken");
 
@@ -92,6 +95,13 @@ public class CubeJsAdapter implements ToolExecutor {
                     requestBuilder.header("X-User-Context", userContext);
                 }
 
+                /* 내부 데이터소스 사용 시 DB 연결 정보를 추가 헤더로 전달 */
+                if (config.containsKey("datasourceHost")) {
+                    requestBuilder.header("X-Datasource-Host", (String) config.get("datasourceHost"));
+                    requestBuilder.header("X-Datasource-Port", String.valueOf(config.get("datasourcePort")));
+                    requestBuilder.header("X-Datasource-Database", (String) config.get("datasourceDatabase"));
+                }
+
                 HttpResponse<String> response = httpClient.send(requestBuilder.build(),
                         HttpResponse.BodyHandlers.ofString());
 
@@ -112,57 +122,74 @@ public class CubeJsAdapter implements ToolExecutor {
         });
     }
 
-    /**
-     * CUBE_JS 도구 타입을 지원합니다.
-     *
-     * @param type 도구 타입
-     * @return CUBE_JS 타입이면 true
-     */
     @Override
     public boolean supports(ToolType type) {
         return type == ToolType.CUBE_JS;
     }
 
     /**
-     * 입력 파라미터에서 Cube.js 쿼리 객체를 구성합니다.
-     * measures, dimensions, filters, timeDimensions, limit, offset, order를 지원합니다.
+     * 도구의 연결 설정을 해석합니다.
      *
-     * @param params 입력 파라미터 맵
-     * @return Cube.js 쿼리 맵
+     * <p>cubeDatasourceId가 설정된 경우 내부 레지스트리에서 데이터소스를 조회하여
+     * 연결 정보를 구성합니다. 그렇지 않으면 기존 connectionConfig JSON을 파싱합니다.</p>
+     *
+     * @param tool 도구 엔티티
+     * @return 연결 설정 맵
+     */
+    private Map<String, Object> resolveConnectionConfig(Tool tool) {
+        /* 내부 데이터소스가 연결된 경우 레지스트리에서 조회 */
+        if (tool.getCubeDatasourceId() != null) {
+            CubeDataSource ds = cubeDataSourceRepository.findById(tool.getCubeDatasourceId())
+                    .orElseThrow(() -> new ToolExecutionException(tool.getName(),
+                            "연결된 데이터소스를 찾을 수 없습니다: " + tool.getCubeDatasourceId()));
+
+            try {
+                Map<String, Object> dsConfig = objectMapper.readValue(
+                        ds.getConnectionConfig(), new TypeReference<>() {});
+
+                /* 내부 데이터소스의 DB 정보를 Cube.js 연결 설정으로 변환 */
+                Map<String, Object> config = new LinkedHashMap<>();
+                config.put("apiUrl", dsConfig.getOrDefault("apiUrl",
+                        "http://localhost:4000/cubejs-api/v1"));
+                config.put("apiToken", dsConfig.get("apiToken"));
+                config.put("datasourceHost", dsConfig.get("host"));
+                config.put("datasourcePort", dsConfig.get("port"));
+                config.put("datasourceDatabase", dsConfig.get("database"));
+                config.put("datasourceUsername", dsConfig.get("username"));
+
+                log.debug("내부 데이터소스 '{}' 사용: {}:{}/{}",
+                        ds.getName(), dsConfig.get("host"), dsConfig.get("port"), dsConfig.get("database"));
+                return config;
+            } catch (Exception e) {
+                throw new ToolExecutionException(tool.getName(),
+                        "내부 데이터소스 connectionConfig 파싱 실패", e);
+            }
+        }
+
+        /* 기존 방식: 도구의 connectionConfig 직접 사용 */
+        return parseConnectionConfig(tool);
+    }
+
+    /**
+     * 입력 파라미터에서 Cube.js 쿼리 객체를 구성합니다.
+     * measures, dimensions, filters, timeDimensions, limit, offset, order, segments를 지원합니다.
      */
     private Map<String, Object> buildCubeQuery(Map<String, Object> params) {
         Map<String, Object> query = new LinkedHashMap<>();
-
-        if (params.containsKey("measures")) {
-            query.put("measures", params.get("measures"));
+        String[] supportedKeys = {
+                "measures", "dimensions", "filters", "timeDimensions",
+                "limit", "offset", "order", "segments"
+        };
+        for (String key : supportedKeys) {
+            if (params.containsKey(key)) {
+                query.put(key, params.get(key));
+            }
         }
-        if (params.containsKey("dimensions")) {
-            query.put("dimensions", params.get("dimensions"));
-        }
-        if (params.containsKey("filters")) {
-            query.put("filters", params.get("filters"));
-        }
-        if (params.containsKey("timeDimensions")) {
-            query.put("timeDimensions", params.get("timeDimensions"));
-        }
-        if (params.containsKey("limit")) {
-            query.put("limit", params.get("limit"));
-        }
-        if (params.containsKey("offset")) {
-            query.put("offset", params.get("offset"));
-        }
-        if (params.containsKey("order")) {
-            query.put("order", params.get("order"));
-        }
-
         return query;
     }
 
     /**
      * 도구의 connectionConfig JSON 문자열을 Map으로 파싱합니다.
-     *
-     * @param tool 도구 엔티티
-     * @return 파싱된 설정 맵
      */
     private Map<String, Object> parseConnectionConfig(Tool tool) {
         try {

@@ -261,6 +261,8 @@ public class ToolService {
                 .isPublic(tool.getIsPublic())
                 .isIdempotent(tool.getIsIdempotent())
                 .ownerId(tool.getOwnerId())
+                .cubeDatasourceId(tool.getCubeDatasourceId())
+                .awsServerId(tool.getAwsServerId())
                 .createdAt(tool.getCreatedAt())
                 .updatedAt(tool.getUpdatedAt())
                 .build();

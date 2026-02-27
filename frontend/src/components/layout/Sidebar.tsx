@@ -17,6 +17,8 @@ const navItems: NavItem[] = [
   { label: 'Permissions', path: '/permissions' },
   { label: 'Audit Logs', path: '/audit-logs' },
   { label: 'Playground', path: '/playground' },
+  { label: 'Cube.js', path: '/cube', adminOnly: true },
+  { label: 'AWS MCP', path: '/aws-mcp', adminOnly: true },
   { label: 'Settings', path: '/settings', adminOnly: true },
 ]
 

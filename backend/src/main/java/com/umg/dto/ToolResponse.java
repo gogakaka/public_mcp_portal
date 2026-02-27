@@ -32,6 +32,8 @@ public class ToolResponse {
     private Boolean isIdempotent;
     private UUID ownerId;
     private String ownerName;
+    private UUID cubeDatasourceId;
+    private UUID awsServerId;
     private Instant createdAt;
     private Instant updatedAt;
 }

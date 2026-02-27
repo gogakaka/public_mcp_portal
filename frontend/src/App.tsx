@@ -16,6 +16,8 @@ const PermissionsPage = lazy(() => import('@/pages/PermissionsPage'))
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogsPage'))
 const PlaygroundPage = lazy(() => import('@/pages/PlaygroundPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
+const CubeManagementPage = lazy(() => import('@/pages/CubeManagementPage'))
+const AwsMcpManagementPage = lazy(() => import('@/pages/AwsMcpManagementPage'))
 
 /* 지연 로딩 중 표시할 폴백 컴포넌트 */
 function PageFallback() {
@@ -50,6 +52,8 @@ export default function App() {
           <Route path="/permissions" element={<PermissionsPage />} />
           <Route path="/audit-logs" element={<AuditLogsPage />} />
           <Route path="/playground" element={<PlaygroundPage />} />
+          <Route path="/cube" element={<CubeManagementPage />} />
+          <Route path="/aws-mcp" element={<AwsMcpManagementPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
 

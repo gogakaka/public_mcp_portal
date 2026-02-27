@@ -251,3 +251,182 @@ export interface ExecuteToolResponse {
   result: unknown
   executionTimeMs: number
 }
+
+/* ===== Cube.js 데이터소스 ===== */
+
+export enum CubeDbType {
+  POSTGRESQL = 'POSTGRESQL',
+  MYSQL = 'MYSQL',
+  BIGQUERY = 'BIGQUERY',
+  REDSHIFT = 'REDSHIFT',
+  SNOWFLAKE = 'SNOWFLAKE',
+  CLICKHOUSE = 'CLICKHOUSE',
+}
+
+export enum DataSourceStatus {
+  ACTIVE = 'ACTIVE',
+  INACTIVE = 'INACTIVE',
+  ERROR = 'ERROR',
+}
+
+export enum SchemaStatus {
+  DRAFT = 'DRAFT',
+  ACTIVE = 'ACTIVE',
+  ARCHIVED = 'ARCHIVED',
+}
+
+export enum AwsAuthType {
+  IAM_KEY = 'IAM_KEY',
+  IAM_ROLE = 'IAM_ROLE',
+}
+
+export interface CubeDataSource {
+  id: string
+  name: string
+  description: string
+  dbType: CubeDbType
+  status: DataSourceStatus
+  lastTestedAt: string | null
+  createdBy: string
+  creatorName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateCubeDataSourceRequest {
+  name: string
+  description?: string
+  dbType: CubeDbType
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+}
+
+export interface UpdateCubeDataSourceRequest {
+  name?: string
+  description?: string
+  host?: string
+  port?: number
+  database?: string
+  username?: string
+  password?: string
+}
+
+export interface ConnectionTestResult {
+  success: boolean
+  message: string
+  responseTimeMs: number | null
+}
+
+export interface CubeSchema {
+  id: string
+  datasourceId: string
+  datasourceName: string
+  name: string
+  description: string
+  schemaDefinition: string
+  version: number
+  status: SchemaStatus
+  createdBy: string
+  creatorName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateCubeSchemaRequest {
+  datasourceId: string
+  name: string
+  description?: string
+  schemaDefinition: string
+}
+
+export interface UpdateCubeSchemaRequest {
+  name?: string
+  description?: string
+  schemaDefinition?: string
+}
+
+export interface ValidationResult {
+  valid: boolean
+  message: string
+}
+
+export interface CubeMeta {
+  cubeName: string
+  schemaId: string
+  schemaName: string
+  measures: string[]
+  dimensions: string[]
+}
+
+/* ===== AWS MCP 서버 ===== */
+
+export interface AwsMcpServer {
+  id: string
+  name: string
+  description: string
+  endpointUrl: string
+  region: string
+  service: string
+  authType: AwsAuthType
+  status: DataSourceStatus
+  syncedToolCount: number
+  lastSyncedAt: string | null
+  lastHealthCheckAt: string | null
+  createdBy: string
+  creatorName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateAwsMcpServerRequest {
+  name: string
+  description?: string
+  endpointUrl: string
+  region: string
+  service?: string
+  authType: AwsAuthType
+  accessKeyId?: string
+  secretAccessKey?: string
+  roleArn?: string
+}
+
+export interface UpdateAwsMcpServerRequest {
+  name?: string
+  description?: string
+  endpointUrl?: string
+  region?: string
+  service?: string
+  accessKeyId?: string
+  secretAccessKey?: string
+  roleArn?: string
+}
+
+export interface AwsConnectionTestResult {
+  success: boolean
+  message: string
+  protocolVersion: string | null
+  serverName: string | null
+  responseTimeMs: number | null
+}
+
+export interface SyncResult {
+  success: boolean
+  message: string
+  toolsDiscovered: number
+  toolsCreated: number
+  toolsUpdated: number
+}
+
+export interface SyncHistory {
+  id: string
+  serverId: string
+  status: string
+  toolsDiscovered: number
+  toolsCreated: number
+  toolsUpdated: number
+  errorMessage: string | null
+  createdAt: string
+}
