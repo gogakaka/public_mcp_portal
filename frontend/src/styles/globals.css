@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-secondary text-text font-sans antialiased;
+  }
+
+  * {
+    @apply border-border;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border-l-2 border-b border-l-primary-900 border-b-border relative;
+  }
+
+  .card-subtle {
+    @apply bg-white border-l border-b border-l-border-strong border-b-border;
+  }
+
+  .section-header {
+    @apply border-l-2 border-l-primary-900 pl-3;
+  }
+
+  .stat-block {
+    @apply border-l-2 border-b border-l-primary-900 border-b-border pl-4 pb-3;
+  }
+
+  .nav-item {
+    @apply border-l-2 border-l-transparent hover:border-l-primary-900 transition-colors;
+  }
+
+  .nav-item-active {
+    @apply border-l-2 border-l-primary-900 bg-surface-tertiary;
+  }
+
+  .table-row {
+    @apply border-b border-b-border hover:bg-surface-tertiary transition-colors;
+  }
+
+  .input-field {
+    @apply bg-white border-l border-b border-l-border-strong border-b-border outline-none focus:border-l-primary-900 transition-colors px-3 py-2 text-sm;
+  }
+
+  .btn-primary {
+    @apply bg-primary-900 text-white px-4 py-2 text-sm font-medium hover:bg-primary-800 transition-colors;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-primary-900 border-l border-b border-l-primary-900 border-b-border px-4 py-2 text-sm font-medium hover:bg-surface-tertiary transition-colors;
+  }
+
+  .badge {
+    @apply text-2xs font-medium px-2 py-0.5 border-l border-l-current;
+  }
+
+  .badge-success {
+    @apply badge text-emerald-700 bg-emerald-50;
+  }
+
+  .badge-warning {
+    @apply badge text-amber-700 bg-amber-50;
+  }
+
+  .badge-error {
+    @apply badge text-red-700 bg-red-50;
+  }
+
+  .badge-info {
+    @apply badge text-blue-700 bg-blue-50;
+  }
+}
