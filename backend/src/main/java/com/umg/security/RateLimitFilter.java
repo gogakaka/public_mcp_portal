@@ -27,17 +27,17 @@ import java.time.Instant;
 import java.util.function.Supplier;
 
 /**
- * Servlet filter that enforces per-client rate limiting using Bucket4j
- * with Redis-backed distributed buckets.
+ * API 키별 속도 제한 서블릿 필터.
  *
- * <p>Rate limits are determined by:</p>
+ * <p>Bucket4j와 Redis를 사용하여 분산 환경에서의 속도 제한을 적용합니다.
+ * 속도 제한은 다음 기준으로 결정됩니다:</p>
  * <ul>
- *   <li>For API key authenticated requests: the key's configured {@code rateLimitPerMin}</li>
- *   <li>For all other requests: the application's default rate limit</li>
+ *   <li>API 키 인증 요청: 해당 키에 설정된 {@code rateLimitPerMin} 값</li>
+ *   <li>기타 요청: 애플리케이션 기본 속도 제한 값</li>
  * </ul>
  *
- * <p>When the rate limit is exceeded, the filter returns HTTP 429 with
- * a {@code Retry-After} header indicating when the client may retry.</p>
+ * <p>제한 초과 시 HTTP 429(Too Many Requests) 응답과 함께
+ * {@code Retry-After} 헤더를 반환합니다.</p>
  */
 @Component
 @Order(1)
@@ -62,19 +62,30 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 각 요청에 대해 속도 제한을 검사합니다.
+     *
+     * <p>API 엔드포인트(/api/**)에 대해서만 속도 제한을 적용하며,
+     * 헬스체크 등의 액추에이터 엔드포인트는 제외합니다.</p>
+     *
+     * @param request     HTTP 요청
+     * @param response    HTTP 응답
+     * @param filterChain 필터 체인
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
 
-        // Skip rate limiting for non-API endpoints
         String path = request.getRequestURI();
+
+        /* 비 API 엔드포인트는 속도 제한 건너뛰기 */
         if (!path.startsWith("/api/")) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        // Skip rate limiting for health checks
+        /* 액추에이터 엔드포인트는 속도 제한 건너뛰기 */
         if (path.startsWith("/actuator/")) {
             filterChain.doFilter(request, response);
             return;
@@ -83,7 +94,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String bucketKey;
         int rateLimit;
 
-        // Determine rate limit based on API key or IP
+        /* API 키 또는 IP 주소 기반으로 속도 제한 결정 */
         String rawApiKey = request.getHeader(API_KEY_HEADER);
         if (rawApiKey != null && !rawApiKey.isBlank()) {
             String keyHash = HashUtil.sha256(rawApiKey);
@@ -109,9 +120,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
 
         if (probe.isConsumed()) {
+            /* 남은 토큰 수를 응답 헤더에 포함 */
             response.addHeader("X-Rate-Limit-Remaining", String.valueOf(probe.getRemainingTokens()));
             filterChain.doFilter(request, response);
         } else {
+            /* 속도 제한 초과: 429 응답 반환 */
             long retryAfterSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000 + 1;
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
@@ -121,17 +134,25 @@ public class RateLimitFilter extends OncePerRequestFilter {
             ErrorResponse errorResponse = ErrorResponse.builder()
                     .status(429)
                     .error("Too Many Requests")
-                    .message("Rate limit exceeded. Please retry after " + retryAfterSeconds + " seconds.")
+                    .message("속도 제한을 초과했습니다. " + retryAfterSeconds + "초 후에 다시 시도해주세요.")
                     .path(path)
                     .timestamp(Instant.now())
                     .build();
 
             objectMapper.writeValue(response.getOutputStream(), errorResponse);
 
-            log.warn("Rate limit exceeded for bucket '{}' on path '{}'", bucketKey, path);
+            log.warn("속도 제한 초과 - 버킷: '{}', 경로: '{}'", bucketKey, path);
         }
     }
 
+    /**
+     * 클라이언트 IP 주소를 추출합니다.
+     * X-Forwarded-For 헤더가 있으면 첫 번째 IP를 사용하고,
+     * 없으면 원격 주소를 사용합니다.
+     *
+     * @param request HTTP 요청
+     * @return 클라이언트 IP 주소
+     */
     private String getClientIp(HttpServletRequest request) {
         String xForwardedFor = request.getHeader("X-Forwarded-For");
         if (xForwardedFor != null && !xForwardedFor.isBlank()) {
