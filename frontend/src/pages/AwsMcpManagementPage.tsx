@@ -1,6 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useUIStore } from '@/stores/uiStore'
-import { cn, formatDateTime } from '@/lib/utils'
 import {
   useAwsMcpServers,
   useCreateAwsMcpServer,
@@ -9,231 +7,345 @@ import {
   useSyncAwsMcpServer,
   useSyncHistory,
 } from '@/api/awsMcpServers'
+import { useUIStore } from '@/stores/uiStore'
+import { cn, formatDateTime } from '@/lib/utils'
+import { AwsAuthType, DataSourceStatus } from '@/types'
 import type {
-  AwsAuthType,
-  DataSourceStatus,
   AwsMcpServer,
   CreateAwsMcpServerRequest,
+  SyncHistory,
 } from '@/types'
 
-const AWS_REGIONS = [
+/* ===== 상수 ===== */
+
+type TabKey = 'servers' | 'history'
+
+const tabs: { key: TabKey; label: string }[] = [
+  { key: 'servers', label: '서버' },
+  { key: 'history', label: '동기화 이력' },
+]
+
+const awsRegions = [
   'us-east-1',
   'us-east-2',
   'us-west-1',
   'us-west-2',
-  'eu-west-1',
-  'eu-west-2',
-  'eu-central-1',
   'ap-northeast-1',
   'ap-northeast-2',
+  'ap-northeast-3',
   'ap-southeast-1',
   'ap-southeast-2',
+  'ap-south-1',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-west-3',
+  'eu-north-1',
+  'sa-east-1',
+  'ca-central-1',
 ]
 
-const statusBadge = (status: DataSourceStatus) => {
-  switch (status) {
-    case 'ACTIVE':
-      return 'badge-success'
-    case 'INACTIVE':
-      return 'text-xs px-2 py-0.5 bg-gray-100 text-gray-600'
-    case 'ERROR':
-      return 'badge-error'
-    default:
-      return 'text-xs px-2 py-0.5 bg-gray-100 text-gray-600'
-  }
+const authTypes = Object.values(AwsAuthType)
+
+const statusBadge: Record<DataSourceStatus, string> = {
+  [DataSourceStatus.ACTIVE]: 'badge-success',
+  [DataSourceStatus.INACTIVE]:
+    'text-2xs font-medium px-2 py-0.5 border-l border-l-current text-gray-500 bg-gray-50',
+  [DataSourceStatus.ERROR]: 'badge-error',
 }
 
-type Tab = 'servers' | 'history'
+/* ===== 초기 폼 값 ===== */
+
+const emptyForm: CreateAwsMcpServerRequest = {
+  name: '',
+  description: '',
+  endpointUrl: '',
+  region: 'ap-northeast-2',
+  service: 'execute-api',
+  authType: AwsAuthType.IAM_KEY,
+  accessKeyId: '',
+  secretAccessKey: '',
+  roleArn: '',
+}
+
+/* ===== 컴포넌트 ===== */
 
 export default function AwsMcpManagementPage() {
-  const [tab, setTab] = useState<Tab>('servers')
-  const [showForm, setShowForm] = useState(false)
-  const [historyServerId, setHistoryServerId] = useState<string>('')
-  const [form, setForm] = useState<CreateAwsMcpServerRequest>({
-    name: '',
-    endpointUrl: '',
-    region: 'us-east-1',
-    service: 'execute-api',
-    authType: 'IAM_KEY' as AwsAuthType,
-  })
-
   useEffect(() => {
     useUIStore.getState().setCurrentPage('AWS MCP')
   }, [])
 
-  const { data: serversData, isLoading } = useAwsMcpServers()
+  /* 탭 상태 */
+  const [activeTab, setActiveTab] = useState<TabKey>('servers')
+
+  /* ---------- 서버 ---------- */
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState<CreateAwsMcpServerRequest>({ ...emptyForm })
+
+  const {
+    data: serverData,
+    isLoading: serverLoading,
+    isError: serverError,
+    refetch: serverRefetch,
+  } = useAwsMcpServers()
   const createServer = useCreateAwsMcpServer()
   const deleteServer = useDeleteAwsMcpServer()
   const testConnection = useTestAwsMcpServerConnection()
-  const syncTools = useSyncAwsMcpServer()
-  const { data: historyData } = useSyncHistory(historyServerId || undefined)
+  const syncServer = useSyncAwsMcpServer()
 
-  const servers: AwsMcpServer[] = (serversData as any)?.content || serversData?.data || []
+  const handleFormChange = (
+    field: keyof CreateAwsMcpServerRequest,
+    value: string,
+  ) => {
+    setForm((prev) => ({ ...prev, [field]: value }))
+  }
 
   const handleCreate = () => {
-    createServer.mutate(form, {
+    if (!form.name || !form.endpointUrl || !form.region) return
+    if (form.authType === AwsAuthType.IAM_KEY && (!form.accessKeyId || !form.secretAccessKey)) return
+    if (form.authType === AwsAuthType.IAM_ROLE && !form.roleArn) return
+
+    const payload: CreateAwsMcpServerRequest = {
+      name: form.name,
+      description: form.description || undefined,
+      endpointUrl: form.endpointUrl,
+      region: form.region,
+      service: form.service || 'execute-api',
+      authType: form.authType,
+    }
+
+    if (form.authType === AwsAuthType.IAM_KEY) {
+      payload.accessKeyId = form.accessKeyId
+      payload.secretAccessKey = form.secretAccessKey
+    } else {
+      payload.roleArn = form.roleArn
+    }
+
+    createServer.mutate(payload, {
       onSuccess: () => {
         setShowForm(false)
-        setForm({
-          name: '',
-          endpointUrl: '',
-          region: 'us-east-1',
-          service: 'execute-api',
-          authType: 'IAM_KEY' as AwsAuthType,
-        })
+        setForm({ ...emptyForm })
       },
     })
   }
 
-  const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`"${name}" 서버를 삭제하시겠습니까?`)) {
-      deleteServer.mutate(id)
-    }
-  }
+  /* ---------- 동기화 이력 ---------- */
+  const [selectedServerId, setSelectedServerId] = useState<string>('')
+  const [historyPage, setHistoryPage] = useState(0)
+
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyError,
+    refetch: historyRefetch,
+  } = useSyncHistory(selectedServerId || undefined, historyPage)
+
+  const serverList: AwsMcpServer[] = serverData?.data ?? []
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="section-header">
-        <h2 className="text-lg font-bold text-text tracking-tight">AWS MCP 서버 관리</h2>
-        <p className="text-xs text-text-tertiary mt-1">
-          AWS 원격 MCP 서버 등록, 연결 테스트, 도구 동기화
-        </p>
+    <div className="space-y-4">
+      {/* 페이지 헤더 */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="section-header">
+          <h2 className="text-base font-semibold text-text">AWS MCP 서버 관리</h2>
+          <p className="text-2xs text-text-tertiary">
+            AWS MCP 서버 등록 및 도구 동기화
+          </p>
+        </div>
       </div>
 
       {/* 탭 */}
-      <div className="flex gap-0 border-b border-b-border">
-        {([
-          { key: 'servers' as Tab, label: '서버' },
-          { key: 'history' as Tab, label: '동기화 이력' },
-        ]).map((t) => (
+      <div className="flex gap-0 border-b-2 border-b-primary-900">
+        {tabs.map((tab) => (
           <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
             className={cn(
-              'px-4 py-2 text-sm transition-colors border-b-2 -mb-px',
-              tab === t.key
-                ? 'border-b-text text-text font-medium'
-                : 'border-b-transparent text-text-secondary hover:text-text'
+              'px-4 py-2 text-xs font-medium transition-colors',
+              activeTab === tab.key
+                ? 'bg-primary-900 text-white'
+                : 'bg-white text-text-secondary hover:bg-surface-tertiary',
             )}
           >
-            {t.label}
+            {tab.label}
           </button>
         ))}
       </div>
 
-      {/* 서버 탭 */}
-      {tab === 'servers' && (
+      {/* ==================== 서버 탭 ==================== */}
+      {activeTab === 'servers' && (
         <div className="space-y-4">
           <div className="flex justify-end">
             <button
-              onClick={() => setShowForm(!showForm)}
-              className="btn-primary text-sm px-4 py-2"
+              onClick={() => setShowForm((prev) => !prev)}
+              className="btn-primary text-xs"
             >
               {showForm ? '취소' : '서버 등록'}
             </button>
           </div>
 
+          {/* 인라인 생성 폼 */}
           {showForm && (
             <div className="card p-4 space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <h3 className="text-xs font-semibold text-text border-l-2 border-l-primary-900 pl-2">
+                새 AWS MCP 서버
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs text-text-secondary mb-1">이름</label>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    이름 *
+                  </label>
                   <input
-                    className="input-field w-full text-sm px-3 py-2"
+                    type="text"
                     value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="cloudwatch-mcp"
+                    onChange={(e) => handleFormChange('name', e.target.value)}
+                    placeholder="서버 이름"
+                    className="input-field w-full text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-text-secondary mb-1">엔드포인트 URL</label>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    설명
+                  </label>
                   <input
-                    className="input-field w-full text-sm px-3 py-2"
-                    value={form.endpointUrl}
-                    onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })}
-                    placeholder="https://mcp.us-east-1.amazonaws.com"
+                    type="text"
+                    value={form.description}
+                    onChange={(e) =>
+                      handleFormChange('description', e.target.value)
+                    }
+                    placeholder="서버 설명"
+                    className="input-field w-full text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-text-secondary mb-1">리전</label>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    Endpoint URL *
+                  </label>
+                  <input
+                    type="text"
+                    value={form.endpointUrl}
+                    onChange={(e) =>
+                      handleFormChange('endpointUrl', e.target.value)
+                    }
+                    placeholder="https://xxx.execute-api.ap-northeast-2.amazonaws.com/mcp"
+                    className="input-field w-full text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    리전 *
+                  </label>
                   <select
-                    className="input-field w-full text-sm px-3 py-2"
                     value={form.region}
-                    onChange={(e) => setForm({ ...form, region: e.target.value })}
+                    onChange={(e) => handleFormChange('region', e.target.value)}
+                    className="input-field w-full text-xs"
                   >
-                    {AWS_REGIONS.map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                    {awsRegions.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-text-secondary mb-1">서비스</label>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    서비스
+                  </label>
                   <input
-                    className="input-field w-full text-sm px-3 py-2"
-                    value={form.service || ''}
-                    onChange={(e) => setForm({ ...form, service: e.target.value })}
+                    type="text"
+                    value={form.service}
+                    onChange={(e) =>
+                      handleFormChange('service', e.target.value)
+                    }
                     placeholder="execute-api"
+                    className="input-field w-full text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-text-secondary mb-1">인증 방식</label>
+                  <label className="text-2xs text-text-secondary block mb-1">
+                    인증 방식 *
+                  </label>
                   <select
-                    className="input-field w-full text-sm px-3 py-2"
                     value={form.authType}
-                    onChange={(e) => setForm({ ...form, authType: e.target.value as AwsAuthType })}
+                    onChange={(e) =>
+                      handleFormChange('authType', e.target.value)
+                    }
+                    className="input-field w-full text-xs"
                   >
-                    <option value="IAM_KEY">IAM Access Key</option>
-                    <option value="IAM_ROLE">IAM Role ARN</option>
+                    {authTypes.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">설명</label>
-                  <input
-                    className="input-field w-full text-sm px-3 py-2"
-                    value={form.description || ''}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                    placeholder="CloudWatch 로그 분석 MCP"
-                  />
-                </div>
-                {form.authType === 'IAM_KEY' && (
+
+                {/* IAM_KEY 필드 */}
+                {form.authType === AwsAuthType.IAM_KEY && (
                   <>
                     <div>
-                      <label className="block text-xs text-text-secondary mb-1">Access Key ID</label>
+                      <label className="text-2xs text-text-secondary block mb-1">
+                        Access Key ID *
+                      </label>
                       <input
-                        className="input-field w-full text-sm px-3 py-2"
-                        value={form.accessKeyId || ''}
-                        onChange={(e) => setForm({ ...form, accessKeyId: e.target.value })}
-                        placeholder="AKIA..."
+                        type="text"
+                        value={form.accessKeyId}
+                        onChange={(e) =>
+                          handleFormChange('accessKeyId', e.target.value)
+                        }
+                        placeholder="AKIAIOSFODNN7EXAMPLE"
+                        className="input-field w-full text-xs"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-text-secondary mb-1">Secret Access Key</label>
+                      <label className="text-2xs text-text-secondary block mb-1">
+                        Secret Access Key *
+                      </label>
                       <input
                         type="password"
-                        className="input-field w-full text-sm px-3 py-2"
-                        value={form.secretAccessKey || ''}
-                        onChange={(e) => setForm({ ...form, secretAccessKey: e.target.value })}
+                        value={form.secretAccessKey}
+                        onChange={(e) =>
+                          handleFormChange('secretAccessKey', e.target.value)
+                        }
+                        placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                        className="input-field w-full text-xs"
                       />
                     </div>
                   </>
                 )}
-                {form.authType === 'IAM_ROLE' && (
-                  <div className="md:col-span-2">
-                    <label className="block text-xs text-text-secondary mb-1">Role ARN</label>
+
+                {/* IAM_ROLE 필드 */}
+                {form.authType === AwsAuthType.IAM_ROLE && (
+                  <div className="sm:col-span-2">
+                    <label className="text-2xs text-text-secondary block mb-1">
+                      Role ARN *
+                    </label>
                     <input
-                      className="input-field w-full text-sm px-3 py-2"
-                      value={form.roleArn || ''}
-                      onChange={(e) => setForm({ ...form, roleArn: e.target.value })}
-                      placeholder="arn:aws:iam::123456789012:role/McpRole"
+                      type="text"
+                      value={form.roleArn}
+                      onChange={(e) =>
+                        handleFormChange('roleArn', e.target.value)
+                      }
+                      placeholder="arn:aws:iam::123456789012:role/MyRole"
+                      className="input-field w-full text-xs"
                     />
                   </div>
                 )}
               </div>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    setShowForm(false)
+                    setForm({ ...emptyForm })
+                  }}
+                  className="btn-secondary text-xs"
+                >
+                  취소
+                </button>
                 <button
                   onClick={handleCreate}
-                  disabled={createServer.isPending || !form.name || !form.endpointUrl}
-                  className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
+                  disabled={createServer.isPending}
+                  className="btn-primary text-xs disabled:opacity-50"
                 >
                   {createServer.isPending ? '등록 중...' : '등록'}
                 </button>
@@ -241,137 +353,323 @@ export default function AwsMcpManagementPage() {
             </div>
           )}
 
-          {isLoading ? (
-            <div className="text-sm text-text-secondary py-8 text-center">로딩 중...</div>
-          ) : servers.length === 0 ? (
-            <div className="text-sm text-text-secondary py-8 text-center">
-              등록된 AWS MCP 서버가 없습니다
+          {/* 로딩 / 에러 */}
+          {serverLoading && (
+            <div className="card p-6 text-center text-xs text-text-tertiary">
+              불러오는 중...
             </div>
-          ) : (
-            <div className="space-y-0">
-              {/* 테이블 헤더 */}
-              <div className="grid grid-cols-12 gap-2 px-4 py-2 text-2xs uppercase tracking-wider text-text-tertiary border-b border-b-border">
-                <div className="col-span-2">이름</div>
-                <div className="col-span-3">엔드포인트</div>
-                <div className="col-span-1">리전</div>
-                <div className="col-span-1">상태</div>
-                <div className="col-span-1">도구 수</div>
-                <div className="col-span-2">마지막 동기화</div>
-                <div className="col-span-2">작업</div>
-              </div>
+          )}
+          {serverError && (
+            <div className="card p-6 text-center">
+              <p className="text-xs text-red-600 mb-2">
+                서버 목록을 불러오지 못했습니다
+              </p>
+              <button
+                onClick={() => serverRefetch()}
+                className="btn-secondary text-xs"
+              >
+                재시도
+              </button>
+            </div>
+          )}
 
-              {servers.map((server) => (
-                <div key={server.id} className="table-row grid grid-cols-12 gap-2 px-4 py-3 items-center">
-                  <div className="col-span-2">
-                    <p className="text-sm font-medium text-text">{server.name}</p>
-                    {server.description && (
-                      <p className="text-2xs text-text-tertiary truncate">{server.description}</p>
-                    )}
-                  </div>
-                  <div className="col-span-3 text-xs text-text-secondary truncate">
-                    {server.endpointUrl}
-                  </div>
-                  <div className="col-span-1 text-xs text-text-secondary">{server.region}</div>
-                  <div className="col-span-1">
-                    <span className={statusBadge(server.status as DataSourceStatus)}>
-                      {server.status}
-                    </span>
-                  </div>
-                  <div className="col-span-1 text-xs text-text-secondary tabular-nums">
-                    {server.syncedToolCount}
-                  </div>
-                  <div className="col-span-2 text-xs text-text-tertiary">
-                    {server.lastSyncedAt ? formatDateTime(server.lastSyncedAt) : '-'}
-                  </div>
-                  <div className="col-span-2 flex gap-2 flex-wrap">
-                    <button
-                      onClick={() => testConnection.mutate(server.id)}
-                      disabled={testConnection.isPending}
-                      className="btn-secondary text-2xs px-2 py-1"
-                    >
-                      연결 테스트
-                    </button>
-                    <button
-                      onClick={() => syncTools.mutate(server.id)}
-                      disabled={syncTools.isPending}
-                      className="btn-primary text-2xs px-2 py-1"
-                    >
-                      동기화
-                    </button>
-                    <button
-                      onClick={() => handleDelete(server.id, server.name)}
-                      className="text-2xs px-2 py-1 text-red-600 hover:text-red-800"
-                    >
-                      삭제
-                    </button>
-                  </div>
-                </div>
-              ))}
+          {/* 서버 목록 비어있을 때 */}
+          {serverData && serverData.data.length === 0 && !showForm && (
+            <div className="card p-6 text-center">
+              <p className="text-sm text-text mb-1">
+                등록된 서버가 없습니다
+              </p>
+              <p className="text-2xs text-text-tertiary">
+                위의 "서버 등록" 버튼으로 새 AWS MCP 서버를 등록하세요.
+              </p>
+            </div>
+          )}
+
+          {/* 서버 테이블 */}
+          {serverData && serverData.data.length > 0 && (
+            <div className="card p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b-2 border-b-primary-900">
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        이름
+                      </th>
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        Endpoint
+                      </th>
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        리전
+                      </th>
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        상태
+                      </th>
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        동기화 도구
+                      </th>
+                      <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        마지막 동기화
+                      </th>
+                      <th className="text-right text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                        작업
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {serverData.data.map((server: AwsMcpServer) => (
+                      <tr key={server.id} className="table-row">
+                        <td className="px-4 py-3">
+                          <p className="text-sm font-medium text-text">
+                            {server.name}
+                          </p>
+                          {server.description && (
+                            <p className="text-2xs text-text-tertiary">
+                              {server.description}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-text-secondary max-w-[200px] truncate">
+                          {server.endpointUrl}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-text-secondary">
+                          {server.region}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={statusBadge[server.status]}>
+                            {server.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-text-secondary">
+                          {server.syncedToolCount}개
+                        </td>
+                        <td className="px-4 py-3 text-xs text-text-tertiary">
+                          {formatDateTime(server.lastSyncedAt)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => testConnection.mutate(server.id)}
+                              disabled={testConnection.isPending}
+                              className="text-2xs text-text-secondary hover:text-text transition-colors"
+                            >
+                              {testConnection.isPending
+                                ? '테스트 중...'
+                                : '연결 테스트'}
+                            </button>
+                            <button
+                              onClick={() => syncServer.mutate(server.id)}
+                              disabled={syncServer.isPending}
+                              className="text-2xs text-emerald-600 hover:text-emerald-700 transition-colors"
+                            >
+                              {syncServer.isPending
+                                ? '동기화 중...'
+                                : '도구 동기화'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    `"${server.name}" 서버를 삭제하시겠습니까?`,
+                                  )
+                                ) {
+                                  deleteServer.mutate(server.id)
+                                }
+                              }}
+                              className="text-2xs text-red-600 hover:text-red-700 transition-colors"
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* 동기화 이력 탭 */}
-      {tab === 'history' && (
+      {/* ==================== 동기화 이력 탭 ==================== */}
+      {activeTab === 'history' && (
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs text-text-secondary mb-1">서버 선택</label>
-            <select
-              className="input-field text-sm px-3 py-2 w-64"
-              value={historyServerId}
-              onChange={(e) => setHistoryServerId(e.target.value)}
-            >
-              <option value="">서버를 선택하세요</option>
-              {servers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+          {/* 서버 선택 */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <label className="text-xs text-text-secondary whitespace-nowrap">
+                서버 선택
+              </label>
+              <select
+                value={selectedServerId}
+                onChange={(e) => {
+                  setSelectedServerId(e.target.value)
+                  setHistoryPage(0)
+                }}
+                className="input-field text-xs flex-1"
+              >
+                <option value="">-- 서버를 선택하세요 --</option>
+                {serverList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.region})
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {historyServerId && historyData && (
-            <div className="space-y-0">
-              <div className="grid grid-cols-12 gap-2 px-4 py-2 text-2xs uppercase tracking-wider text-text-tertiary border-b border-b-border">
-                <div className="col-span-1">상태</div>
-                <div className="col-span-2">발견</div>
-                <div className="col-span-2">생성</div>
-                <div className="col-span-2">업데이트</div>
-                <div className="col-span-3">오류</div>
-                <div className="col-span-2">시간</div>
-              </div>
+          {/* 서버 미선택 */}
+          {!selectedServerId && (
+            <div className="card p-6 text-center">
+              <p className="text-sm text-text mb-1">
+                서버를 선택하세요
+              </p>
+              <p className="text-2xs text-text-tertiary">
+                동기화 이력을 조회할 서버를 위 드롭다운에서 선택하세요.
+              </p>
+            </div>
+          )}
 
-              {((historyData as any)?.content || historyData?.data || []).map((h: any) => (
-                <div key={h.id} className="table-row grid grid-cols-12 gap-2 px-4 py-3 items-center">
-                  <div className="col-span-1">
-                    <span className={h.status === 'SUCCESS' ? 'badge-success' : 'badge-error'}>
-                      {h.status}
-                    </span>
-                  </div>
-                  <div className="col-span-2 text-xs tabular-nums">{h.toolsDiscovered}개</div>
-                  <div className="col-span-2 text-xs tabular-nums">{h.toolsCreated}개</div>
-                  <div className="col-span-2 text-xs tabular-nums">{h.toolsUpdated}개</div>
-                  <div className="col-span-3 text-xs text-text-tertiary truncate">
-                    {h.errorMessage || '-'}
-                  </div>
-                  <div className="col-span-2 text-xs text-text-tertiary">
-                    {formatDateTime(h.createdAt)}
-                  </div>
-                </div>
-              ))}
+          {/* 로딩 / 에러 */}
+          {selectedServerId && historyLoading && (
+            <div className="card p-6 text-center text-xs text-text-tertiary">
+              불러오는 중...
+            </div>
+          )}
+          {selectedServerId && historyError && (
+            <div className="card p-6 text-center">
+              <p className="text-xs text-red-600 mb-2">
+                동기화 이력을 불러오지 못했습니다
+              </p>
+              <button
+                onClick={() => historyRefetch()}
+                className="btn-secondary text-xs"
+              >
+                재시도
+              </button>
+            </div>
+          )}
 
-              {((historyData as any)?.content || historyData?.data || []).length === 0 && (
-                <div className="text-sm text-text-secondary py-8 text-center">
+          {/* 이력 비어있을 때 */}
+          {selectedServerId &&
+            historyData &&
+            historyData.data.length === 0 && (
+              <div className="card p-6 text-center">
+                <p className="text-sm text-text mb-1">
                   동기화 이력이 없습니다
-                </div>
-              )}
-            </div>
-          )}
+                </p>
+                <p className="text-2xs text-text-tertiary">
+                  서버 탭에서 "도구 동기화"를 실행하면 이력이 기록됩니다.
+                </p>
+              </div>
+            )}
 
-          {!historyServerId && (
-            <div className="text-sm text-text-secondary py-8 text-center">
-              서버를 선택하여 동기화 이력을 확인하세요
-            </div>
-          )}
+          {/* 이력 테이블 */}
+          {selectedServerId &&
+            historyData &&
+            historyData.data.length > 0 && (
+              <>
+                <div className="card p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b-2 border-b-primary-900">
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            상태
+                          </th>
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            발견
+                          </th>
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            생성
+                          </th>
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            업데이트
+                          </th>
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            오류 메시지
+                          </th>
+                          <th className="text-left text-2xs font-semibold text-text-secondary uppercase tracking-wider px-4 py-3">
+                            일시
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {historyData.data.map((row: SyncHistory) => (
+                          <tr key={row.id} className="table-row">
+                            <td className="px-4 py-3">
+                              <span
+                                className={cn(
+                                  row.status === 'SUCCESS'
+                                    ? 'badge-success'
+                                    : row.status === 'PENDING'
+                                      ? 'badge-warning'
+                                      : 'badge-error',
+                                )}
+                              >
+                                {row.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-text-secondary">
+                              {row.toolsDiscovered}개
+                            </td>
+                            <td className="px-4 py-3 text-xs text-text-secondary">
+                              {row.toolsCreated}개
+                            </td>
+                            <td className="px-4 py-3 text-xs text-text-secondary">
+                              {row.toolsUpdated}개
+                            </td>
+                            <td className="px-4 py-3 text-xs text-text-tertiary max-w-[250px] truncate">
+                              {row.errorMessage || '--'}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-text-tertiary">
+                              {formatDateTime(row.createdAt)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* 페이지네이션 */}
+                {historyData.totalPages > 1 && (
+                  <div className="flex items-center justify-center gap-2 pt-2">
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.max(0, p - 1))}
+                      disabled={historyPage === 0}
+                      className={cn(
+                        'px-3 py-1.5 text-xs font-medium transition-colors',
+                        historyPage === 0
+                          ? 'text-text-tertiary cursor-not-allowed'
+                          : 'text-text hover:bg-surface-tertiary',
+                      )}
+                    >
+                      이전
+                    </button>
+                    <span className="text-xs text-text-secondary">
+                      {historyPage + 1} / {historyData.totalPages}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setHistoryPage((p) =>
+                          Math.min(historyData.totalPages - 1, p + 1),
+                        )
+                      }
+                      disabled={historyPage >= historyData.totalPages - 1}
+                      className={cn(
+                        'px-3 py-1.5 text-xs font-medium transition-colors',
+                        historyPage >= historyData.totalPages - 1
+                          ? 'text-text-tertiary cursor-not-allowed'
+                          : 'text-text hover:bg-surface-tertiary',
+                      )}
+                    >
+                      다음
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
         </div>
       )}
     </div>
