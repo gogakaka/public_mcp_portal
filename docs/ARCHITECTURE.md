@@ -144,7 +144,7 @@ HTTP 요청
 
 ```java
 interface ToolExecutor {
-    CompletableFuture<Object> execute(Tool tool, Map<String, Object> params);
+    CompletableFuture<Object> execute(Tool tool, Map<String, Object> params, String userContext);
     boolean supports(ToolType type);
 }
 
@@ -160,7 +160,115 @@ class ToolExecutorFactory {
 |--------|---------|------|------|
 | N8nAdapter | HTTP POST | Bearer 토큰 | n8n 웹훅 워크플로우 |
 | CubeJsAdapter | HTTP GET/POST | 토큰 + RLS 헤더 | Cube.js 시맨틱 쿼리 |
-| AwsRemoteMcpProxyAdapter | HTTP + SigV4 | AWS IAM 역할 | AWS MCP 서버 |
+| AwsRemoteMcpProxyAdapter | HTTP + SigV4 | AWS IAM 자격 증명 | AWS MCP 서버 |
+
+### Cube.js 내부 통합 아키텍처 (Phase 7-A)
+
+Cube.js 어댑터는 내부 데이터소스 레지스트리와 통합되어, 외부 connectionConfig 없이도 내부 관리되는 데이터소스를 통해 Cube.js 쿼리를 실행할 수 있습니다.
+
+```
+도구 호출 요청
+    |
+    v
+[CubeJsAdapter]
+    |
+    +-- cubeDatasourceId 존재?
+    |       |
+    |   YES |                    NO
+    |       v                     v
+    |   [CubeDataSourceRepository]   [connectionConfig에서 직접 파싱]
+    |       |
+    |       v
+    |   내부 데이터소스 조회
+    |   (AES 복호화 후 연결 정보 추출)
+    |       |
+    +-------+
+    |
+    v
+[Cube.js REST API 호출]
+    | - X-User-Context (RLS용)
+    | - X-Datasource-Host/Port/Database (내부 DS용)
+    v
+[Cube.js 서버]
+```
+
+**핵심 구성 요소:**
+
+| 구성 요소 | 역할 |
+|-----------|------|
+| `CubeDataSource` 엔티티 | DB 연결 정보 관리 (AES-256 암호화) |
+| `CubeSchema` 엔티티 | Cube.js 모델 정의 관리 (버전 관리) |
+| `CubeDataSourceService` | CRUD, 연결 테스트 (JDBC), 테이블 인트로스펙션 |
+| `CubeSchemaService` | CRUD, 버전 자동 증가, 유효성 검증, 메타 조회 |
+| `CubeDataSourceController` | REST API `/api/cube/datasources` |
+| `CubeSchemaController` | REST API `/api/cube/schemas` |
+
+**지원 DB 타입 및 JDBC URL 패턴:**
+
+| DB 타입 | JDBC URL 패턴 |
+|---------|--------------|
+| POSTGRESQL | `jdbc:postgresql://{host}:{port}/{database}` |
+| MYSQL | `jdbc:mysql://{host}:{port}/{database}` |
+| BIGQUERY | `jdbc:bigquery://{host}:{port};ProjectId={database}` |
+| REDSHIFT | `jdbc:redshift://{host}:{port}/{database}` |
+| SNOWFLAKE | `jdbc:snowflake://{host}:{port}/?db={database}` |
+| CLICKHOUSE | `jdbc:clickhouse://{host}:{port}/{database}` |
+
+### AWS MCP 서버 레지스트리 아키텍처 (Phase 7-B)
+
+AWS MCP 어댑터는 내부 서버 레지스트리와 통합되어, 등록된 AWS MCP 서버의 자격 증명과 엔드포인트를 중앙 관리합니다.
+
+```
+도구 호출 요청
+    |
+    v
+[AwsRemoteMcpProxyAdapter]
+    |
+    +-- awsServerId 존재?
+    |       |
+    |   YES |                    NO
+    |       v                     v
+    |   [AwsMcpServerRepository]     [connectionConfig에서 직접 파싱]
+    |       |
+    |       v
+    |   내부 서버 조회
+    |   (AES 복호화 후 자격 증명 추출)
+    |       |
+    +-------+
+    |
+    v
+[AwsConnectionInfo 구성]
+    | - endpointUrl, region, service
+    | - accessKeyId, secretAccessKey
+    v
+[SigV4 서명 + HTTP POST]
+    | 1. 페이로드 SHA-256 해시
+    | 2. Canonical Request 생성
+    | 3. String-to-Sign 생성
+    | 4. HMAC-SHA256으로 서명 키 유도
+    | 5. Authorization 헤더 구성
+    v
+[AWS 원격 MCP 서버]
+```
+
+**도구 자동 동기화 흐름:**
+
+```
+POST /api/aws-mcp/servers/{id}/sync
+    |
+    v
+[AwsMcpServerService.syncTools()]
+    | 1. 서버 정보 조회 및 자격 증명 복호화
+    | 2. SigV4 서명 + initialize RPC 전송
+    | 3. SigV4 서명 + tools/list RPC 전송
+    | 4. 발견된 도구 목록 순회:
+    |     - 기존 도구 있음 → 설명/스키마 업데이트
+    |     - 새 도구 발견 → Tool 엔티티 생성 (PENDING 상태)
+    | 5. 동기화 이력 저장 (AwsMcpSyncHistory)
+    | 6. 서버의 syncedToolCount 업데이트
+    v
+{success: true, toolsDiscovered: 10, toolsCreated: 7, toolsUpdated: 3}
+```
 
 ### MCP 프로토콜 구현
 
@@ -218,6 +326,13 @@ App
 |       +-- 페이지
 |           +-- DashboardPage (대시보드)
 |           +-- ToolsPage / ToolDetailPage / ToolCreatePage (도구)
+|           +-- CubeManagementPage (Cube.js 관리 - 관리자 전용)
+|           |   +-- 데이터소스 탭 (CRUD, 연결 테스트, 테이블 조회)
+|           |   +-- 스키마 탭 (CRUD, 버전 관리, 유효성 검증)
+|           |   +-- 메타 탐색기 탭 (활성 스키마 큐브/지표/차원 조회)
+|           +-- AwsMcpManagementPage (AWS MCP 관리 - 관리자 전용)
+|           |   +-- 서버 탭 (CRUD, 연결 테스트, 도구 동기화)
+|           |   +-- 동기화 이력 탭 (서버별 동기화 결과 조회)
 |           +-- ApiKeysPage (API 키)
 |           +-- PermissionsPage (권한)
 |           +-- AuditLogsPage (감사 로그)
@@ -263,10 +378,22 @@ USERS
   |-- 1:N --> PERMISSIONS (도구 접근 권한)
   |-- 1:N --> TOOLS (소유자로서)
   |-- 1:N --> AUDIT_LOGS (행위자로서)
+  |-- 1:N --> CUBE_DATA_SOURCES (생성자)
+  |-- 1:N --> CUBE_SCHEMAS (생성자)
+  |-- 1:N --> AWS_MCP_SERVERS (생성자)
 
 TOOLS
   |-- 1:N --> PERMISSIONS (접근 가능한 사용자)
   |-- 1:N --> AUDIT_LOGS (실행 이력)
+  |-- N:1 --> CUBE_DATA_SOURCES (Cube.js 도구의 데이터소스)
+  |-- N:1 --> AWS_MCP_SERVERS (AWS 동기화 도구의 원본 서버)
+
+CUBE_DATA_SOURCES
+  |-- 1:N --> CUBE_SCHEMAS (데이터소스에 정의된 스키마)
+
+AWS_MCP_SERVERS
+  |-- 1:N --> AWS_MCP_SYNC_HISTORY (동기화 이력)
+  |-- 1:N --> TOOLS (동기화로 생성된 도구)
 ```
 
 ### 주요 설계 결정

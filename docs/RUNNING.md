@@ -231,6 +231,194 @@ X-API-Key: umg_key_xxxxx
 Accept: text/event-stream
 ```
 
+### Cube.js 데이터소스 관리 (관리자 전용)
+
+#### 데이터소스 목록 조회
+
+```bash
+GET /api/cube/datasources?status=ACTIVE&page=0&size=20
+Authorization: Bearer {token}
+```
+
+#### 데이터소스 생성
+
+```bash
+POST /api/cube/datasources
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "name": "analytics-postgres",
+  "description": "분석용 PostgreSQL 데이터소스",
+  "dbType": "POSTGRESQL",
+  "host": "analytics-db.internal",
+  "port": 5432,
+  "database": "analytics",
+  "username": "cube_reader",
+  "password": "secure-password"
+}
+```
+
+응답 (201 Created):
+```json
+{
+  "id": "uuid",
+  "name": "analytics-postgres",
+  "dbType": "POSTGRESQL",
+  "status": "ACTIVE",
+  "lastTestedAt": null,
+  "creatorName": "Admin",
+  "createdAt": "2026-02-27T10:00:00Z"
+}
+```
+
+#### 연결 테스트
+
+```bash
+POST /api/cube/datasources/{id}/test
+Authorization: Bearer {token}
+```
+
+응답:
+```json
+{
+  "success": true,
+  "message": "연결 성공 (PostgreSQL 16.2)",
+  "responseTimeMs": 42
+}
+```
+
+#### 테이블 인트로스펙션
+
+```bash
+GET /api/cube/datasources/{id}/tables
+Authorization: Bearer {token}
+```
+
+응답:
+```json
+{
+  "orders": [
+    {"columnName": "id", "dataType": "uuid", "isNullable": false},
+    {"columnName": "amount", "dataType": "numeric", "isNullable": true}
+  ]
+}
+```
+
+### Cube.js 스키마 관리 (관리자 전용)
+
+#### 스키마 생성
+
+```bash
+POST /api/cube/schemas
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "datasourceId": "datasource-uuid",
+  "name": "orders-cube",
+  "description": "주문 분석용 큐브 스키마",
+  "schemaDefinition": "{\"cube\":\"Orders\",\"measures\":{\"count\":{\"type\":\"count\"}},\"dimensions\":{\"status\":{\"sql\":\"status\",\"type\":\"string\"}}}"
+}
+```
+
+#### 스키마 유효성 검증
+
+```bash
+POST /api/cube/schemas/{id}/validate
+Authorization: Bearer {token}
+```
+
+#### 스키마 활성화 / 아카이브
+
+```bash
+POST /api/cube/schemas/{id}/activate
+POST /api/cube/schemas/{id}/archive
+Authorization: Bearer {token}
+```
+
+#### 활성 스키마 메타 조회
+
+```bash
+GET /api/cube/schemas/meta
+Authorization: Bearer {token}
+```
+
+응답:
+```json
+[
+  {
+    "schemaName": "orders-cube",
+    "cubeName": "Orders",
+    "measures": ["count"],
+    "dimensions": ["status"]
+  }
+]
+```
+
+### AWS MCP 서버 관리 (관리자 전용)
+
+#### 서버 등록
+
+```bash
+POST /api/aws-mcp/servers
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "name": "redshift-mcp",
+  "description": "AWS Redshift MCP 서버",
+  "endpointUrl": "https://mcp-redshift.us-east-1.amazonaws.com",
+  "region": "us-east-1",
+  "authType": "IAM_KEY",
+  "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
+  "secretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+}
+```
+
+#### 연결 테스트
+
+```bash
+POST /api/aws-mcp/servers/{id}/test
+Authorization: Bearer {token}
+```
+
+응답:
+```json
+{
+  "success": true,
+  "message": "연결 성공",
+  "protocolVersion": "2024-11-05",
+  "serverName": "aws-redshift-mcp-server",
+  "responseTimeMs": 320
+}
+```
+
+#### 도구 동기화
+
+```bash
+POST /api/aws-mcp/servers/{id}/sync
+Authorization: Bearer {token}
+```
+
+응답:
+```json
+{
+  "success": true,
+  "message": "동기화 완료: 10개 발견, 7개 생성, 3개 업데이트",
+  "toolsDiscovered": 10,
+  "toolsCreated": 7,
+  "toolsUpdated": 3
+}
+```
+
+#### 동기화 이력 조회
+
+```bash
+GET /api/aws-mcp/servers/{id}/sync-history?page=0&size=20
+Authorization: Bearer {token}
+```
+
 ### 권한 관리
 
 #### 권한 부여
