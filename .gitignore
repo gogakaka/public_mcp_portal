@@ -1,0 +1,32 @@
+# Java
+backend/build/
+backend/.gradle/
+*.class
+*.jar
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Bridge
+bridge/node_modules/
+bridge/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+.env.local
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+postgres_data/
+redis_data/
