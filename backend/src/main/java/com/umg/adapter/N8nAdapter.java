@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.umg.domain.entity.Tool;
 import com.umg.domain.enums.ToolType;
 import com.umg.exception.ToolExecutionException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,12 +39,14 @@ public class N8nAdapter implements ToolExecutor {
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final CircuitBreaker circuitBreaker;
 
-    public N8nAdapter(ObjectMapper objectMapper) {
+    public N8nAdapter(ObjectMapper objectMapper, CircuitBreakerRegistry circuitBreakerRegistry) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = objectMapper;
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("n8n", "n8n");
     }
 
     /**
@@ -55,45 +59,47 @@ public class N8nAdapter implements ToolExecutor {
      */
     @Override
     public CompletableFuture<Object> execute(Tool tool, Map<String, Object> params, String userContext) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Map<String, Object> config = parseConnectionConfig(tool);
-                String webhookUrl = (String) config.get("webhookUrl");
-                if (webhookUrl == null || webhookUrl.isBlank()) {
-                    throw new ToolExecutionException(tool.getName(), "connectionConfig에 webhookUrl이 없습니다");
-                }
+        return CompletableFuture.supplyAsync(() ->
+                circuitBreaker.executeSupplier(() -> {
+                    try {
+                        Map<String, Object> config = parseConnectionConfig(tool);
+                        String webhookUrl = (String) config.get("webhookUrl");
+                        if (webhookUrl == null || webhookUrl.isBlank()) {
+                            throw new ToolExecutionException(tool.getName(), "connectionConfig에 webhookUrl이 없습니다");
+                        }
 
-                String requestBody = objectMapper.writeValueAsString(params);
+                        String requestBody = objectMapper.writeValueAsString(params);
 
-                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                        .uri(URI.create(webhookUrl))
-                        .header("Content-Type", "application/json")
-                        .timeout(REQUEST_TIMEOUT)
-                        .POST(HttpRequest.BodyPublishers.ofString(requestBody));
+                        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                                .uri(URI.create(webhookUrl))
+                                .header("Content-Type", "application/json")
+                                .timeout(REQUEST_TIMEOUT)
+                                .POST(HttpRequest.BodyPublishers.ofString(requestBody));
 
-                /* Bearer 토큰이 설정되어 있으면 인증 헤더 추가 */
-                String bearerToken = (String) config.get("bearerToken");
-                if (bearerToken != null && !bearerToken.isBlank()) {
-                    requestBuilder.header("Authorization", "Bearer " + bearerToken);
-                }
+                        /* Bearer 토큰이 설정되어 있으면 인증 헤더 추가 */
+                        String bearerToken = (String) config.get("bearerToken");
+                        if (bearerToken != null && !bearerToken.isBlank()) {
+                            requestBuilder.header("Authorization", "Bearer " + bearerToken);
+                        }
 
-                HttpResponse<String> response = httpClient.send(requestBuilder.build(),
-                        HttpResponse.BodyHandlers.ofString());
+                        HttpResponse<String> response = httpClient.send(requestBuilder.build(),
+                                HttpResponse.BodyHandlers.ofString());
 
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    log.debug("n8n 웹훅 응답 ({}): {}", response.statusCode(), response.body());
-                    return (Object) response.body();
-                } else {
-                    throw new ToolExecutionException(tool.getName(),
-                            String.format("n8n 웹훅이 HTTP %d 응답 반환: %s",
-                                    response.statusCode(), response.body()));
-                }
-            } catch (ToolExecutionException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ToolExecutionException(tool.getName(), "n8n 웹훅 호출 실패", e);
-            }
-        });
+                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                            log.debug("n8n 웹훅 응답 ({}): {}", response.statusCode(), response.body());
+                            return (Object) response.body();
+                        } else {
+                            throw new ToolExecutionException(tool.getName(),
+                                    String.format("n8n 웹훅이 HTTP %d 응답 반환: %s",
+                                            response.statusCode(), response.body()));
+                        }
+                    } catch (ToolExecutionException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new ToolExecutionException(tool.getName(), "n8n 웹훅 호출 실패", e);
+                    }
+                })
+        );
     }
 
     /**

@@ -7,6 +7,8 @@ import com.umg.domain.entity.Tool;
 import com.umg.domain.enums.ToolType;
 import com.umg.exception.ToolExecutionException;
 import com.umg.repository.AwsMcpServerRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -49,13 +51,16 @@ public class AwsRemoteMcpProxyAdapter implements ToolExecutor {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final AwsMcpServerRepository awsMcpServerRepository;
+    private final CircuitBreaker circuitBreaker;
 
-    public AwsRemoteMcpProxyAdapter(ObjectMapper objectMapper, AwsMcpServerRepository awsMcpServerRepository) {
+    public AwsRemoteMcpProxyAdapter(ObjectMapper objectMapper, AwsMcpServerRepository awsMcpServerRepository,
+                                     CircuitBreakerRegistry circuitBreakerRegistry) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = objectMapper;
         this.awsMcpServerRepository = awsMcpServerRepository;
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("awsMcp", "awsMcp");
     }
 
     /**
@@ -66,34 +71,36 @@ public class AwsRemoteMcpProxyAdapter implements ToolExecutor {
      */
     @Override
     public CompletableFuture<Object> execute(Tool tool, Map<String, Object> params, String userContext) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                AwsConnectionInfo connInfo = resolveConnectionInfo(tool);
+        return CompletableFuture.supplyAsync(() ->
+                circuitBreaker.executeSupplier(() -> {
+                    try {
+                        AwsConnectionInfo connInfo = resolveConnectionInfo(tool);
 
-                /* MCP tools/call JSON-RPC 페이로드 구성 */
-                Map<String, Object> mcpPayload = Map.of(
-                        "jsonrpc", "2.0",
-                        "id", "1",
-                        "method", "tools/call",
-                        "params", Map.of(
-                                "name", tool.getName(),
-                                "arguments", params
-                        )
-                );
+                        /* MCP tools/call JSON-RPC 페이로드 구성 */
+                        Map<String, Object> mcpPayload = Map.of(
+                                "jsonrpc", "2.0",
+                                "id", "1",
+                                "method", "tools/call",
+                                "params", Map.of(
+                                        "name", tool.getName(),
+                                        "arguments", params
+                                )
+                        );
 
-                String requestBody = objectMapper.writeValueAsString(mcpPayload);
-                String responseBody = signAndSend(connInfo, requestBody);
+                        String requestBody = objectMapper.writeValueAsString(mcpPayload);
+                        String responseBody = signAndSend(connInfo, requestBody);
 
-                log.debug("AWS 원격 MCP 응답: {}",
-                        responseBody.substring(0, Math.min(200, responseBody.length())));
-                return (Object) responseBody;
+                        log.debug("AWS 원격 MCP 응답: {}",
+                                responseBody.substring(0, Math.min(200, responseBody.length())));
+                        return (Object) responseBody;
 
-            } catch (ToolExecutionException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ToolExecutionException(tool.getName(), "AWS 원격 MCP 서버 호출 실패", e);
-            }
-        });
+                    } catch (ToolExecutionException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new ToolExecutionException(tool.getName(), "AWS 원격 MCP 서버 호출 실패", e);
+                    }
+                })
+        );
     }
 
     @Override

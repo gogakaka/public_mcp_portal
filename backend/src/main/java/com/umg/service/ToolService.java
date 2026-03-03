@@ -5,16 +5,22 @@ import com.umg.domain.enums.ToolStatus;
 import com.umg.dto.*;
 import com.umg.exception.ForbiddenException;
 import com.umg.exception.ResourceNotFoundException;
+import com.umg.config.CacheConfig;
+import com.umg.domain.enums.AdminAction;
 import com.umg.repository.ToolRepository;
 import com.umg.security.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -31,10 +37,13 @@ public class ToolService {
 
     private final ToolRepository toolRepository;
     private final SecurityUtils securityUtils;
+    private final AdminAuditService adminAuditService;
 
-    public ToolService(ToolRepository toolRepository, SecurityUtils securityUtils) {
+    public ToolService(ToolRepository toolRepository, SecurityUtils securityUtils,
+                       AdminAuditService adminAuditService) {
         this.toolRepository = toolRepository;
         this.securityUtils = securityUtils;
+        this.adminAuditService = adminAuditService;
     }
 
     /**
@@ -73,6 +82,7 @@ public class ToolService {
      * @return the tool response
      * @throws ResourceNotFoundException if the tool does not exist
      */
+    @Cacheable(value = CacheConfig.CACHE_TOOL_BY_ID, key = "#toolId")
     @Transactional(readOnly = true)
     public ToolResponse getToolById(UUID toolId) {
         Tool tool = findToolOrThrow(toolId);
@@ -99,6 +109,10 @@ public class ToolService {
      * @param request the update request
      * @return the updated tool response
      */
+    @Caching(evict = {
+            @CacheEvict(value = CacheConfig.CACHE_TOOL_BY_ID, key = "#toolId"),
+            @CacheEvict(value = CacheConfig.CACHE_ACCESSIBLE_TOOLS, allEntries = true)
+    })
     @Transactional
     public ToolResponse updateTool(UUID toolId, ToolUpdateRequest request) {
         Tool tool = findToolOrThrow(toolId);
@@ -146,6 +160,10 @@ public class ToolService {
      *
      * @param toolId the tool's UUID
      */
+    @Caching(evict = {
+            @CacheEvict(value = CacheConfig.CACHE_TOOL_BY_ID, key = "#toolId"),
+            @CacheEvict(value = CacheConfig.CACHE_ACCESSIBLE_TOOLS, allEntries = true)
+    })
     @Transactional
     public void deleteTool(UUID toolId) {
         Tool tool = findToolOrThrow(toolId);
@@ -165,6 +183,10 @@ public class ToolService {
      * @param toolId the tool's UUID
      * @return the updated tool response
      */
+    @Caching(evict = {
+            @CacheEvict(value = CacheConfig.CACHE_TOOL_BY_ID, key = "#toolId"),
+            @CacheEvict(value = CacheConfig.CACHE_ACCESSIBLE_TOOLS, allEntries = true)
+    })
     @Transactional
     public ToolResponse approveTool(UUID toolId) {
         Tool tool = findToolOrThrow(toolId);
@@ -175,7 +197,10 @@ public class ToolService {
 
         tool.setStatus(ToolStatus.APPROVED);
         Tool updated = toolRepository.save(tool);
-        log.info("Tool '{}' approved by admin {}", updated.getName(), securityUtils.requireCurrentUserId());
+        UUID adminId = securityUtils.requireCurrentUserId();
+        log.info("Tool '{}' approved by admin {}", updated.getName(), adminId);
+        adminAuditService.log(adminId, AdminAction.TOOL_APPROVE, "Tool",
+                toolId, updated.getName(), Map.of("previousStatus", "PENDING"));
         return toResponse(updated);
     }
 
@@ -185,6 +210,10 @@ public class ToolService {
      * @param toolId the tool's UUID
      * @return the updated tool response
      */
+    @Caching(evict = {
+            @CacheEvict(value = CacheConfig.CACHE_TOOL_BY_ID, key = "#toolId"),
+            @CacheEvict(value = CacheConfig.CACHE_ACCESSIBLE_TOOLS, allEntries = true)
+    })
     @Transactional
     public ToolResponse rejectTool(UUID toolId) {
         Tool tool = findToolOrThrow(toolId);
@@ -195,7 +224,10 @@ public class ToolService {
 
         tool.setStatus(ToolStatus.REJECTED);
         Tool updated = toolRepository.save(tool);
-        log.info("Tool '{}' rejected by admin {}", updated.getName(), securityUtils.requireCurrentUserId());
+        UUID adminId = securityUtils.requireCurrentUserId();
+        log.info("Tool '{}' rejected by admin {}", updated.getName(), adminId);
+        adminAuditService.log(adminId, AdminAction.TOOL_REJECT, "Tool",
+                toolId, updated.getName(), Map.of("previousStatus", "PENDING"));
         return toResponse(updated);
     }
 
