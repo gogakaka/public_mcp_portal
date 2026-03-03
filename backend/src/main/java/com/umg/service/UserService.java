@@ -6,9 +6,12 @@ import com.umg.dto.PageResponse;
 import com.umg.dto.UserDto;
 import com.umg.exception.DuplicateResourceException;
 import com.umg.exception.ResourceNotFoundException;
+import com.umg.config.CacheConfig;
 import com.umg.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -66,6 +69,7 @@ public class UserService {
      * @return the user response
      * @throws ResourceNotFoundException if the user does not exist
      */
+    @Cacheable(value = CacheConfig.CACHE_USER_BY_ID, key = "#userId")
     @Transactional(readOnly = true)
     public UserDto.Response getUserById(UUID userId) {
         User user = userRepository.findById(userId)
@@ -93,6 +97,7 @@ public class UserService {
      * @param request the update request
      * @return the updated user response
      */
+    @CacheEvict(value = CacheConfig.CACHE_USER_BY_ID, key = "#userId")
     @Transactional
     public UserDto.Response updateProfile(UUID userId, UserDto.UpdateRequest request) {
         User user = userRepository.findById(userId)

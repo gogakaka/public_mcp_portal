@@ -8,11 +8,14 @@ import com.umg.domain.entity.CubeSchema;
 import com.umg.domain.entity.User;
 import com.umg.domain.enums.SchemaStatus;
 import com.umg.dto.CubeSchemaDto;
+import com.umg.config.CacheConfig;
 import com.umg.repository.CubeDataSourceRepository;
 import com.umg.repository.CubeSchemaRepository;
 import com.umg.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -197,6 +200,7 @@ public class CubeSchemaService {
      * @return 활성화된 스키마 응답 DTO
      * @throws RuntimeException 스키마를 찾을 수 없거나 유효성 검증에 실패한 경우
      */
+    @CacheEvict(value = CacheConfig.CACHE_CUBE_SCHEMA_META, allEntries = true)
     @Transactional
     public CubeSchemaDto.Response activate(UUID id) {
         CubeSchema schema = cubeSchemaRepository.findById(id)
@@ -221,6 +225,7 @@ public class CubeSchemaService {
      * @return 보관된 스키마 응답 DTO
      * @throws RuntimeException 스키마를 찾을 수 없는 경우
      */
+    @CacheEvict(value = CacheConfig.CACHE_CUBE_SCHEMA_META, allEntries = true)
     @Transactional
     public CubeSchemaDto.Response archive(UUID id) {
         CubeSchema schema = cubeSchemaRepository.findById(id)
@@ -262,6 +267,7 @@ public class CubeSchemaService {
      *
      * @return 활성 스키마의 cube 이름, measures, dimensions 목록
      */
+    @Cacheable(value = CacheConfig.CACHE_CUBE_SCHEMA_META)
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getMeta() {
         List<CubeSchema> activeSchemas = cubeSchemaRepository.findByStatusOrderByNameAsc(SchemaStatus.ACTIVE);

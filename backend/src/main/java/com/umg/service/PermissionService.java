@@ -8,11 +8,14 @@ import com.umg.dto.PermissionRequest;
 import com.umg.dto.PermissionResponse;
 import com.umg.exception.DuplicateResourceException;
 import com.umg.exception.ResourceNotFoundException;
+import com.umg.config.CacheConfig;
 import com.umg.repository.PermissionRepository;
 import com.umg.repository.ToolRepository;
 import com.umg.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,6 +49,7 @@ public class PermissionService {
      * @return the created permission response
      * @throws DuplicateResourceException if the permission already exists
      */
+    @CacheEvict(value = CacheConfig.CACHE_PERMISSIONS_BY_USER, key = "#request.userId")
     @Transactional
     public PermissionResponse grantPermission(PermissionRequest request) {
         User user = userRepository.findById(request.getUserId())
@@ -106,6 +110,7 @@ public class PermissionService {
      * @param userId the user's UUID
      * @return list of permission responses
      */
+    @Cacheable(value = CacheConfig.CACHE_PERMISSIONS_BY_USER, key = "#userId")
     @Transactional(readOnly = true)
     public List<PermissionResponse> listPermissionsByUser(UUID userId) {
         return permissionRepository.findByUserId(userId).stream()

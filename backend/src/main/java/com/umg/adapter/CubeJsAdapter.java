@@ -7,6 +7,8 @@ import com.umg.domain.entity.Tool;
 import com.umg.domain.enums.ToolType;
 import com.umg.exception.ToolExecutionException;
 import com.umg.repository.CubeDataSourceRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -41,13 +43,16 @@ public class CubeJsAdapter implements ToolExecutor {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final CubeDataSourceRepository cubeDataSourceRepository;
+    private final CircuitBreaker circuitBreaker;
 
-    public CubeJsAdapter(ObjectMapper objectMapper, CubeDataSourceRepository cubeDataSourceRepository) {
+    public CubeJsAdapter(ObjectMapper objectMapper, CubeDataSourceRepository cubeDataSourceRepository,
+                          CircuitBreakerRegistry circuitBreakerRegistry) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = objectMapper;
         this.cubeDataSourceRepository = cubeDataSourceRepository;
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("cubeJs", "cubeJs");
     }
 
     /**
@@ -63,63 +68,65 @@ public class CubeJsAdapter implements ToolExecutor {
      */
     @Override
     public CompletableFuture<Object> execute(Tool tool, Map<String, Object> params, String userContext) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Map<String, Object> config = resolveConnectionConfig(tool);
-                String apiUrl = (String) config.get("apiUrl");
-                String apiToken = (String) config.get("apiToken");
+        return CompletableFuture.supplyAsync(() ->
+                circuitBreaker.executeSupplier(() -> {
+                    try {
+                        Map<String, Object> config = resolveConnectionConfig(tool);
+                        String apiUrl = (String) config.get("apiUrl");
+                        String apiToken = (String) config.get("apiToken");
 
-                if (apiUrl == null || apiUrl.isBlank()) {
-                    throw new ToolExecutionException(tool.getName(), "connectionConfig에 apiUrl이 없습니다");
-                }
+                        if (apiUrl == null || apiUrl.isBlank()) {
+                            throw new ToolExecutionException(tool.getName(), "connectionConfig에 apiUrl이 없습니다");
+                        }
 
-                /* 입력 파라미터를 Cube.js 쿼리 형식으로 변환 */
-                Map<String, Object> cubeQuery = buildCubeQuery(params);
-                String queryJson = objectMapper.writeValueAsString(Map.of("query", cubeQuery));
+                        /* 입력 파라미터를 Cube.js 쿼리 형식으로 변환 */
+                        Map<String, Object> cubeQuery = buildCubeQuery(params);
+                        String queryJson = objectMapper.writeValueAsString(Map.of("query", cubeQuery));
 
-                String loadUrl = apiUrl.endsWith("/") ? apiUrl + "load" : apiUrl + "/load";
+                        String loadUrl = apiUrl.endsWith("/") ? apiUrl + "load" : apiUrl + "/load";
 
-                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                        .uri(URI.create(loadUrl))
-                        .header("Content-Type", "application/json")
-                        .timeout(REQUEST_TIMEOUT)
-                        .POST(HttpRequest.BodyPublishers.ofString(queryJson));
+                        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                                .uri(URI.create(loadUrl))
+                                .header("Content-Type", "application/json")
+                                .timeout(REQUEST_TIMEOUT)
+                                .POST(HttpRequest.BodyPublishers.ofString(queryJson));
 
-                /* API 토큰이 있으면 인증 헤더 추가 */
-                if (apiToken != null && !apiToken.isBlank()) {
-                    requestBuilder.header("Authorization", apiToken);
-                }
+                        /* API 토큰이 있으면 인증 헤더 추가 */
+                        if (apiToken != null && !apiToken.isBlank()) {
+                            requestBuilder.header("Authorization", apiToken);
+                        }
 
-                /* RLS 적용을 위한 사용자 컨텍스트 헤더 주입 */
-                if (userContext != null && !userContext.isBlank()) {
-                    requestBuilder.header("X-User-Context", userContext);
-                }
+                        /* RLS 적용을 위한 사용자 컨텍스트 헤더 주입 */
+                        if (userContext != null && !userContext.isBlank()) {
+                            requestBuilder.header("X-User-Context", userContext);
+                        }
 
-                /* 내부 데이터소스 사용 시 DB 연결 정보를 추가 헤더로 전달 */
-                if (config.containsKey("datasourceHost")) {
-                    requestBuilder.header("X-Datasource-Host", (String) config.get("datasourceHost"));
-                    requestBuilder.header("X-Datasource-Port", String.valueOf(config.get("datasourcePort")));
-                    requestBuilder.header("X-Datasource-Database", (String) config.get("datasourceDatabase"));
-                }
+                        /* 내부 데이터소스 사용 시 DB 연결 정보를 추가 헤더로 전달 */
+                        if (config.containsKey("datasourceHost")) {
+                            requestBuilder.header("X-Datasource-Host", (String) config.get("datasourceHost"));
+                            requestBuilder.header("X-Datasource-Port", String.valueOf(config.get("datasourcePort")));
+                            requestBuilder.header("X-Datasource-Database", (String) config.get("datasourceDatabase"));
+                        }
 
-                HttpResponse<String> response = httpClient.send(requestBuilder.build(),
-                        HttpResponse.BodyHandlers.ofString());
+                        HttpResponse<String> response = httpClient.send(requestBuilder.build(),
+                                HttpResponse.BodyHandlers.ofString());
 
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    log.debug("Cube.js 응답 ({}): {}", response.statusCode(),
-                            response.body().substring(0, Math.min(200, response.body().length())));
-                    return (Object) response.body();
-                } else {
-                    throw new ToolExecutionException(tool.getName(),
-                            String.format("Cube.js API가 HTTP %d 응답 반환: %s",
-                                    response.statusCode(), response.body()));
-                }
-            } catch (ToolExecutionException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ToolExecutionException(tool.getName(), "Cube.js 쿼리 실행 실패", e);
-            }
-        });
+                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                            log.debug("Cube.js 응답 ({}): {}", response.statusCode(),
+                                    response.body().substring(0, Math.min(200, response.body().length())));
+                            return (Object) response.body();
+                        } else {
+                            throw new ToolExecutionException(tool.getName(),
+                                    String.format("Cube.js API가 HTTP %d 응답 반환: %s",
+                                            response.statusCode(), response.body()));
+                        }
+                    } catch (ToolExecutionException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new ToolExecutionException(tool.getName(), "Cube.js 쿼리 실행 실패", e);
+                    }
+                })
+        );
     }
 
     @Override
